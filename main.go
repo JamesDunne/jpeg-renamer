@@ -2,12 +2,15 @@
 package main
 
 import (
+	"errors"
 	"fmt"
-	"log"
+	"os"
 	"time"
 
 	"github.com/dsoprea/go-exif"
 )
+
+var errNoDateTimeOriginal = errors.New("Could not find DateTimeOriginal EXIF tag")
 
 func extractDateTimeOriginal(path string) (dateTime time.Time, err error) {
 	rawExif, err := exif.SearchFileAndExtractExif(path)
@@ -36,15 +39,25 @@ func extractDateTimeOriginal(path string) (dateTime time.Time, err error) {
 	}
 
 	results, err := exifIfd.FindTagWithName("DateTimeOriginal")
+	if len(results) == 0 {
+		err = errNoDateTimeOriginal
+		return
+	}
+
 	dateTimeOriginal, err := index.RootIfd.TagValue(results[0])
 	if err != nil {
 		return
 	}
 
 	results, err = exifIfd.FindTagWithName("SubSecTimeOriginal")
-	subSecTimeOriginal, err := index.RootIfd.TagValue(results[0])
-	if err != nil {
-		return
+	var subSecTimeOriginal interface{}
+	if len(results) == 1 {
+		subSecTimeOriginal, err = index.RootIfd.TagValue(results[0])
+		if err != nil {
+			return
+		}
+	} else {
+		subSecTimeOriginal = "000"
 	}
 
 	dateTimeFmt := dateTimeOriginal.(string) + "." + subSecTimeOriginal.(string)
@@ -54,10 +67,32 @@ func extractDateTimeOriginal(path string) (dateTime time.Time, err error) {
 }
 
 func main() {
-	dateTime, err := extractDateTimeOriginal("IMG_1847.JPG")
-	if err != nil {
-		log.Panic(err)
+	if len(os.Args) <= 1 {
+		fmt.Println("Expected JPEG path argument(s)")
+		os.Exit(-1)
+		return
 	}
 
-	fmt.Println(dateTime)
+	paths := os.Args[1:]
+	for _, path := range paths {
+		dateTime, err := extractDateTimeOriginal(path)
+		if err != nil {
+			if err == errNoDateTimeOriginal {
+				// Use file modification date if no EXIF tag found:
+				stat, err := os.Stat(path)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "%s: %v\n", path, err)
+					continue
+				}
+				dateTime = stat.ModTime()
+			} else {
+				fmt.Fprintf(os.Stderr, "%s: %v\n", path, err)
+				continue
+			}
+		}
+
+		timestampFilename := dateTime.Format("20060102_150405")
+		timestampFilename += fmt.Sprintf("_%03d.jpg", int64(time.Duration(dateTime.Nanosecond())/time.Millisecond))
+		fmt.Printf("%s\t%s\n", path, timestampFilename)
+	}
 }
