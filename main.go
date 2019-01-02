@@ -108,6 +108,7 @@ func main() {
 	doHardlink := flag.Bool("hardlink", false, "Hard link file to target folder")
 	doOverwrite := flag.Bool("overwrite", false, "Overwrite destination file if exists")
 	useSuffixes := flag.Bool("suffixes", false, "If target file would be overwritten then generate a unique suffix")
+	sourceFolder := flag.String("source", "", "Source folder to scan for JPEGs")
 	targetFolder := flag.String("target", ".", "Destination folder to copy/move files to")
 	flag.Parse()
 
@@ -118,17 +119,24 @@ func main() {
 		*doHardlink = false
 	}
 
-	args := flag.Args()
-
-	if len(args) == 0 {
+	if *sourceFolder == "" {
 		flag.Usage()
 		os.Exit(-1)
 		return
 	}
 
+	*sourceFolder = filepath.Clean(*sourceFolder)
+
 	dirs := make(map[string][]os.FileInfo)
 
-	paths := args[:]
+	jpgs, _ := filepath.Glob(filepath.Join(*sourceFolder, "*.[jJ][pP][gG]"))
+	jpegs, _ := filepath.Glob(filepath.Join(*sourceFolder, "*.[jJ][pP][eE][gG]"))
+	pngs, _ := filepath.Glob(filepath.Join(*sourceFolder, "*.[pP][nN][gG]"))
+	paths := make([]string, 0, len(jpgs)+len(jpegs)+len(pngs))
+	paths = append(paths, jpgs...)
+	paths = append(paths, jpegs...)
+	paths = append(paths, pngs...)
+
 	for _, p := range paths {
 		names := make([]string, 0, 2)
 		names = append(names, p)
@@ -307,7 +315,7 @@ func main() {
 					fmt.Fprintf(os.Stderr, "\"%s\": %v\n", name, err)
 				}
 			} else {
-				fmt.Printf("\"%s\"\t\"%s\"\n", name, destPath)
+				fmt.Printf("\"%s\" \"%s\"\n", name, destPath)
 			}
 		}
 	}
