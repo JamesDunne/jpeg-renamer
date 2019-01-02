@@ -15,9 +15,17 @@ import (
 	"github.com/dsoprea/go-exif"
 )
 
-var errNoDateTimeOriginal = errors.New("Could not find DateTimeOriginal EXIF tag")
+var (
+	errNoDateTimeOriginal = errors.New("Could not find DateTimeOriginal EXIF tag")
+)
 
 func extractDateTimeOriginal(path string) (dateTime time.Time, err error) {
+	ext := strings.ToLower(filepath.Ext(path))
+	if ext != ".jpg" && ext != ".jpeg" {
+		err = errNoDateTimeOriginal
+		return
+	}
+
 	rawExif, err := exif.SearchFileAndExtractExif(path)
 	if err != nil {
 		return
@@ -112,7 +120,7 @@ func main() {
 
 	args := flag.Args()
 
-	if len(args) <= 1 {
+	if len(args) == 0 {
 		flag.Usage()
 		os.Exit(-1)
 		return
@@ -120,7 +128,7 @@ func main() {
 
 	dirs := make(map[string][]os.FileInfo)
 
-	paths := args[1:]
+	paths := args[:]
 	for _, p := range paths {
 		names := make([]string, 0, 2)
 		names = append(names, p)
