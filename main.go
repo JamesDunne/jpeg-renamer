@@ -99,6 +99,7 @@ func main() {
 	doSymlink := flag.Bool("symlink", false, "Symlink file to target folder")
 	doHardlink := flag.Bool("hardlink", false, "Hard link file to target folder")
 	doOverwrite := flag.Bool("overwrite", false, "Overwrite destination file if exists")
+	useSuffixes := flag.Bool("suffixes", false, "If target file would be overwritten then generate a unique suffix")
 	targetFolder := flag.String("target", ".", "Destination folder to copy/move files to")
 	flag.Parse()
 
@@ -173,15 +174,25 @@ func main() {
 	nextName:
 		for _, name := range names {
 			// Generate destination path:
-			destPath := timestampFilename + strings.ToLower(filepath.Ext(name))
-			destPath = filepath.Join(*targetFolder, destPath)
+			destPath := filepath.Join(*targetFolder, timestampFilename+strings.ToLower(filepath.Ext(name)))
 
 			if !*doOverwrite {
 				// Check if destination path exists:
 				destPathExists := PathExists(destPath)
 				if destPathExists {
-					fmt.Fprintf(os.Stderr, "\"%s\": Not overwriting existing file \"%s\"\n", name, destPath)
-					continue nextName
+					if *useSuffixes {
+						// Generate a unique suffix and retry:
+						for counter := 1; ; counter++ {
+							destFilename := fmt.Sprintf("%s_%d%s", timestampFilename, counter, strings.ToLower(filepath.Ext(name)))
+							destPath = filepath.Join(*targetFolder, destFilename)
+							if !PathExists(destPath) {
+								break
+							}
+						}
+					} else {
+						fmt.Fprintf(os.Stderr, "\"%s\": Not overwriting existing file \"%s\"\n", name, destPath)
+						continue nextName
+					}
 				}
 			}
 
