@@ -274,14 +274,16 @@ func main() {
 					fmt.Fprintf(os.Stderr, "\"%s\": %v\n", name, err)
 				}
 			} else if *doSymlink {
+				relName, err := filepath.Rel(*targetFolder, name)
 				fmt.Printf("symlink \"%s\" \"%s\"\n", name, destPath)
-				err := os.Symlink(name, destPath)
+				err = os.Symlink(relName, destPath)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "\"%s\": %v\n", name, err)
 				}
 			} else if *doHardlink {
+				relName, err := filepath.Rel(*targetFolder, name)
 				fmt.Printf("hardlink \"%s\" \"%s\"\n", name, destPath)
-				err := os.Link(name, destPath)
+				err = os.Link(relName, destPath)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "\"%s\": %v\n", name, err)
 				}
