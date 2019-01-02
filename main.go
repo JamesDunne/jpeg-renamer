@@ -176,10 +176,13 @@ func main() {
 			destPath := timestampFilename + strings.ToLower(filepath.Ext(name))
 			destPath = filepath.Join(*targetFolder, destPath)
 
-			destPathExists := PathExists(destPath)
-			if destPathExists && !*doOverwrite {
-				fmt.Fprintf(os.Stderr, "\"%s\": Not overwriting existing file \"%s\"\n", name, destPath)
-				continue nextName
+			if !*doOverwrite {
+				// Check if destination path exists:
+				destPathExists := PathExists(destPath)
+				if destPathExists {
+					fmt.Fprintf(os.Stderr, "\"%s\": Not overwriting existing file \"%s\"\n", name, destPath)
+					continue nextName
+				}
 			}
 
 			filePerm := os.FileMode(0644)
@@ -202,6 +205,11 @@ func main() {
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "\"%s\": %v\n", name, err)
 					continue nextName
+				}
+
+				// Remove target file if overwriting is enabled:
+				if *doOverwrite {
+					os.Remove(destPath)
 				}
 			}
 
