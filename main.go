@@ -3,6 +3,7 @@ package main
 
 import (
 	"errors"
+	"flag"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -79,7 +80,11 @@ func NoExt(path string) string {
 }
 
 func main() {
-	if len(os.Args) <= 1 {
+	flag.Parse()
+
+	args := flag.Args()
+
+	if len(args) <= 1 {
 		fmt.Println("Expected JPEG path argument(s)")
 		os.Exit(-1)
 		return
@@ -87,7 +92,7 @@ func main() {
 
 	dirs := make(map[string][]os.FileInfo)
 
-	paths := os.Args[1:]
+	paths := args[1:]
 	for _, p := range paths {
 		dirname := filepath.Dir(p)
 
@@ -101,14 +106,15 @@ func main() {
 			}
 		}
 
-		similar := make([]string, 0, 1)
+		names := make([]string, 0, 2)
+		names = append(names, p)
 		if dir != nil {
 			for _, f := range dir {
 				if f.Name() == p {
 					continue
 				}
 				if strings.HasPrefix(f.Name(), NoExt(p)) {
-					similar = append(similar, f.Name())
+					names = append(names, f.Name())
 				}
 			}
 		}
@@ -119,21 +125,22 @@ func main() {
 				// Use file modification date if no EXIF tag found:
 				stat, err := os.Stat(p)
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "%s: %v\n", p, err)
+					fmt.Fprintf(os.Stderr, "\"%s\": %v\n", p, err)
 					continue
 				}
 				dateTime = stat.ModTime()
 			} else {
-				fmt.Fprintf(os.Stderr, "%s: %v\n", p, err)
+				fmt.Fprintf(os.Stderr, "\"%s\": %v\n", p, err)
 				continue
 			}
 		}
 
 		timestampFilename := dateTime.Format("20060102_150405")
-		timestampFilename += fmt.Sprintf("_%03d.jpg", int64(time.Duration(dateTime.Nanosecond())/time.Millisecond))
-		fmt.Printf("%s\t%s\n", p, timestampFilename)
-		for _, sim := range similar {
-			fmt.Printf("  %s\n", sim)
+		timestampFilename += fmt.Sprintf("_%03d", int64(time.Duration(dateTime.Nanosecond())/time.Millisecond))
+
+		// Rename all related files to use timestamp:
+		for _, name := range names {
+			fmt.Printf("\"%s\"\t\"%s\"\n", name, timestampFilename+strings.ToLower(filepath.Ext(name)))
 		}
 	}
 }
