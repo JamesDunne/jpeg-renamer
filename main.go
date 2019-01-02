@@ -19,6 +19,12 @@ var (
 )
 
 func extractDateTimeOriginal(path string) (dateTime time.Time, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = errNoDateTimeOriginal
+		}
+	}()
+
 	ext := strings.ToLower(filepath.Ext(path))
 	if ext != ".jpg" && ext != ".jpeg" {
 		err = errNoDateTimeOriginal
