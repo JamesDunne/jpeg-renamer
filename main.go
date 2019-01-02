@@ -4,7 +4,10 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io/ioutil"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/dsoprea/go-exif"
@@ -66,6 +69,15 @@ func extractDateTimeOriginal(path string) (dateTime time.Time, err error) {
 	return
 }
 
+func NoExt(path string) string {
+	for i := len(path) - 1; i >= 0 && !os.IsPathSeparator(path[i]); i-- {
+		if path[i] == '.' {
+			return path[0:i]
+		}
+	}
+	return ""
+}
+
 func main() {
 	if len(os.Args) <= 1 {
 		fmt.Println("Expected JPEG path argument(s)")
@@ -73,26 +85,55 @@ func main() {
 		return
 	}
 
+	dirs := make(map[string][]os.FileInfo)
+
 	paths := os.Args[1:]
-	for _, path := range paths {
-		dateTime, err := extractDateTimeOriginal(path)
+	for _, p := range paths {
+		dirname := filepath.Dir(p)
+
+		var dir []os.FileInfo
+		var ok bool
+		if dir, ok = dirs[dirname]; !ok {
+			var err error
+			dir, err = ioutil.ReadDir(dirname)
+			if err == nil {
+				dirs[dirname] = dir
+			}
+		}
+
+		similar := make([]string, 0, 1)
+		if dir != nil {
+			for _, f := range dir {
+				if f.Name() == p {
+					continue
+				}
+				if strings.HasPrefix(f.Name(), NoExt(p)) {
+					similar = append(similar, f.Name())
+				}
+			}
+		}
+
+		dateTime, err := extractDateTimeOriginal(p)
 		if err != nil {
 			if err == errNoDateTimeOriginal {
 				// Use file modification date if no EXIF tag found:
-				stat, err := os.Stat(path)
+				stat, err := os.Stat(p)
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "%s: %v\n", path, err)
+					fmt.Fprintf(os.Stderr, "%s: %v\n", p, err)
 					continue
 				}
 				dateTime = stat.ModTime()
 			} else {
-				fmt.Fprintf(os.Stderr, "%s: %v\n", path, err)
+				fmt.Fprintf(os.Stderr, "%s: %v\n", p, err)
 				continue
 			}
 		}
 
 		timestampFilename := dateTime.Format("20060102_150405")
 		timestampFilename += fmt.Sprintf("_%03d.jpg", int64(time.Duration(dateTime.Nanosecond())/time.Millisecond))
-		fmt.Printf("%s\t%s\n", path, timestampFilename)
+		fmt.Printf("%s\t%s\n", p, timestampFilename)
+		for _, sim := range similar {
+			fmt.Printf("  %s\n", sim)
+		}
 	}
 }
