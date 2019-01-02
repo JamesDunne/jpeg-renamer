@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -99,6 +98,13 @@ func PathExists(path string) bool {
 	return true
 }
 
+type Source struct {
+	File        os.FileInfo
+	Dir         string
+	Filename    string
+	CreatedDate time.Time
+}
+
 func main() {
 	doRelated := flag.Bool("related", false, "Include files with same filename yet different extension")
 	useModTime := flag.Bool("modtime", false, "Use mod time if no EXIF tag found")
@@ -109,6 +115,7 @@ func main() {
 	doOverwrite := flag.Bool("overwrite", false, "Overwrite destination file if exists")
 	useSuffixes := flag.Bool("suffixes", false, "If target file would be overwritten then generate a unique suffix")
 	sourceFolder := flag.String("source", "", "Source folder to scan for JPEGs")
+	doRecurse := flag.Bool("recurse", false, "Recurse into subdirectories of source folder")
 	targetFolder := flag.String("target", ".", "Destination folder to copy/move files to")
 	flag.Parse()
 
@@ -127,70 +134,93 @@ func main() {
 
 	*sourceFolder = filepath.Clean(*sourceFolder)
 
-	dirs := make(map[string][]os.FileInfo)
+	dirFiles := make(map[string][]string)
 
-	jpgs, _ := filepath.Glob(filepath.Join(*sourceFolder, "*.[jJ][pP][gG]"))
-	jpegs, _ := filepath.Glob(filepath.Join(*sourceFolder, "*.[jJ][pP][eE][gG]"))
-	pngs, _ := filepath.Glob(filepath.Join(*sourceFolder, "*.[pP][nN][gG]"))
-	paths := make([]string, 0, len(jpgs)+len(jpegs)+len(pngs))
-	paths = append(paths, jpgs...)
-	paths = append(paths, jpegs...)
-	paths = append(paths, pngs...)
-
-	for _, p := range paths {
-		names := make([]string, 0, 2)
-		names = append(names, p)
-
-		// Find related filenames with different extensions:
-		if *doRelated {
-			dirname := filepath.Dir(p)
-
-			var dir []os.FileInfo
-			var ok bool
-			if dir, ok = dirs[dirname]; !ok {
-				var err error
-				dir, err = ioutil.ReadDir(dirname)
-				if err == nil {
-					dirs[dirname] = dir
-				}
-			}
-
-			if dir != nil {
-				for _, f := range dir {
-					if f.Name() == p {
-						continue
-					}
-					if strings.HasPrefix(f.Name(), NoExt(p)) {
-						names = append(names, f.Name())
-					}
-				}
-			}
-		}
-
-		dateTime, err := extractDateTimeOriginal(p)
+	sources := make([]*Source, 0, 10)
+	err := filepath.Walk(*sourceFolder, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			if *useModTime && err == errNoDateTimeOriginal {
-				// Use file modification date if no EXIF tag found:
-				stat, err := os.Stat(p)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "\"%s\": %v\n", p, err)
-					continue
-				}
-				dateTime = stat.ModTime()
+			fmt.Printf("prevent panic by handling failure accessing a path %q: %v\n", path, err)
+			return err
+		}
+		if info.IsDir() {
+			if *doRecurse {
+				return nil
 			} else {
-				fmt.Fprintf(os.Stderr, "\"%s\": %v\n", p, err)
-				continue
+				return filepath.SkipDir
 			}
 		}
 
+		// Split path into dir and filename:
+		dir, filename := filepath.Split(path)
+		if strings.HasPrefix(dir, *sourceFolder) {
+			dir = dir[len(*sourceFolder):]
+		}
+
+		// Match filename:
+		isJpg, _ := filepath.Match("*.[jJ][pP][gG]", filename)
+		isJpeg, _ := filepath.Match("*.[jJ][pP][eE][gG]", filename)
+		isPng, _ := filepath.Match("*.[pP][nN][gG]", filename)
+		if isJpg || isJpeg || isPng {
+			// Track this file as a source:
+			dateTime, err := extractDateTimeOriginal(path)
+			if err != nil {
+				if *useModTime && err == errNoDateTimeOriginal {
+					// Use file modification date if no EXIF tag found:
+					dateTime = info.ModTime()
+				} else {
+					fmt.Fprintf(os.Stderr, "\"%s\": %v\n", path, err)
+					return nil
+				}
+			}
+
+			sources = append(sources, &Source{
+				File:        info,
+				Dir:         dir,
+				Filename:    filename,
+				CreatedDate: dateTime,
+			})
+		} else if *doRelated {
+			// Append filename to directory map:
+			var fs []string
+			var ok bool
+			if fs, ok = dirFiles[dir]; !ok {
+				fs = make([]string, 0, 10)
+			}
+			fs = append(fs, filename)
+			dirFiles[dir] = fs
+		}
+
+		return nil
+	})
+
+	for _, source := range sources {
+		dateTime := source.CreatedDate
+
+		names := make([]string, 0, 2)
+		names = append(names, source.Filename)
+
+		// Find related files with same base name but different extension:
+		if *doRelated {
+			for _, fn := range dirFiles[source.Dir] {
+				if strings.HasPrefix(fn, NoExt(source.Filename)) {
+					names = append(names, fn)
+				}
+			}
+		}
+
+		// Generate timestamp base name:
 		timestampFilename := dateTime.Format("20060102_150405")
 		timestampFilename += fmt.Sprintf("_%03d", int64(time.Duration(dateTime.Nanosecond())/time.Millisecond))
 
 		// Rename all related files to use timestamp:
 	nextName:
 		for _, name := range names {
+			// srcPath is relative path from *sourceFolder but not including *sourceFolder prefix
+			srcPath := filepath.Join(source.Dir, name)
+			destExt := strings.ToLower(filepath.Ext(srcPath))
+
 			// Generate destination path:
-			destPath := filepath.Join(*targetFolder, timestampFilename+strings.ToLower(filepath.Ext(name)))
+			destPath := filepath.Join(*targetFolder, source.Dir, timestampFilename+destExt)
 
 			if !*doOverwrite {
 				// Check if destination path exists:
@@ -199,14 +229,14 @@ func main() {
 					if *useSuffixes {
 						// Generate a unique suffix and retry:
 						for counter := 1; ; counter++ {
-							destFilename := fmt.Sprintf("%s_%d%s", timestampFilename, counter, strings.ToLower(filepath.Ext(name)))
-							destPath = filepath.Join(*targetFolder, destFilename)
+							destFilename := fmt.Sprintf("%s_%d%s", timestampFilename, counter, destExt)
+							destPath = filepath.Join(*targetFolder, source.Dir, destFilename)
 							if !PathExists(destPath) {
 								break
 							}
 						}
 					} else {
-						fmt.Fprintf(os.Stderr, "\"%s\": Not overwriting existing file \"%s\"\n", name, destPath)
+						fmt.Fprintf(os.Stderr, "\"%s\": Not overwriting existing file \"%s\"\n", srcPath, destPath)
 						continue nextName
 					}
 				}
@@ -214,11 +244,7 @@ func main() {
 
 			filePerm := os.FileMode(0644)
 			if *doCopy || *doMove || *doSymlink || *doHardlink {
-				stat, err := os.Stat(name)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "\"%s\": %v\n", name, err)
-					continue nextName
-				}
+				stat := source.File
 
 				// Take file permissions of original file:
 				filePerm = stat.Mode() & os.ModePerm
@@ -230,7 +256,7 @@ func main() {
 				// Make directory for target file to be contained in:
 				err = os.MkdirAll(filepath.Dir(destPath), dirPerm)
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "\"%s\": %v\n", name, err)
+					fmt.Fprintf(os.Stderr, "\"%s\": %v\n", srcPath, err)
 					continue nextName
 				}
 
@@ -242,12 +268,12 @@ func main() {
 
 			// Figure out what to do with the file:
 			if *doCopy {
-				fmt.Printf("cp \"%s\" \"%s\"\n", name, destPath)
+				fmt.Printf("cp \"%s\" \"%s\"\n", srcPath, destPath)
 
 				// Open source file for reading:
-				fin, err := os.Open(name)
+				fin, err := os.Open(srcPath)
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "\"%s\": %v\n", name, err)
+					fmt.Fprintf(os.Stderr, "\"%s\": %v\n", srcPath, err)
 					continue nextName
 				}
 
@@ -255,7 +281,7 @@ func main() {
 				fout, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_EXCL, filePerm)
 				if err != nil {
 					fin.Close()
-					fmt.Fprintf(os.Stderr, "\"%s\": %v\n", name, err)
+					fmt.Fprintf(os.Stderr, "\"%s\": %v\n", srcPath, err)
 					continue nextName
 				}
 
@@ -271,7 +297,7 @@ func main() {
 					if err != nil {
 						fin.Close()
 						fout.Close()
-						fmt.Fprintf(os.Stderr, "\"%s\": %v\n", name, err)
+						fmt.Fprintf(os.Stderr, "\"%s\": %v\n", srcPath, err)
 						continue nextName
 					}
 
@@ -280,7 +306,7 @@ func main() {
 					if err != nil {
 						fin.Close()
 						fout.Close()
-						fmt.Fprintf(os.Stderr, "\"%s\": %v\n", name, err)
+						fmt.Fprintf(os.Stderr, "\"%s\": %v\n", srcPath, err)
 						continue nextName
 					}
 				}
@@ -291,31 +317,31 @@ func main() {
 				// Set mod time of target file to that of source file:
 				err = os.Chtimes(destPath, time.Now(), dateTime)
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "\"%s\": %v\n", name, err)
+					fmt.Fprintf(os.Stderr, "\"%s\": %v\n", srcPath, err)
 					continue nextName
 				}
 			} else if *doMove {
-				fmt.Printf("mv \"%s\" \"%s\"\n", name, destPath)
-				err := os.Rename(name, destPath)
+				fmt.Printf("mv \"%s\" \"%s\"\n", srcPath, destPath)
+				err := os.Rename(srcPath, destPath)
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "\"%s\": %v\n", name, err)
+					fmt.Fprintf(os.Stderr, "\"%s\": %v\n", srcPath, err)
 				}
 			} else if *doSymlink {
-				relName, err := filepath.Rel(*targetFolder, name)
-				fmt.Printf("symlink \"%s\" \"%s\"\n", name, destPath)
+				relName, err := filepath.Rel(*targetFolder, srcPath)
+				fmt.Printf("symlink \"%s\" \"%s\"\n", srcPath, destPath)
 				err = os.Symlink(relName, destPath)
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "\"%s\": %v\n", name, err)
+					fmt.Fprintf(os.Stderr, "\"%s\": %v\n", srcPath, err)
 				}
 			} else if *doHardlink {
-				relName, err := filepath.Rel(*targetFolder, name)
-				fmt.Printf("hardlink \"%s\" \"%s\"\n", name, destPath)
+				relName, err := filepath.Rel(*targetFolder, srcPath)
+				fmt.Printf("hardlink \"%s\" \"%s\"\n", srcPath, destPath)
 				err = os.Link(relName, destPath)
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "\"%s\": %v\n", name, err)
+					fmt.Fprintf(os.Stderr, "\"%s\": %v\n", srcPath, err)
 				}
 			} else {
-				fmt.Printf("\"%s\" \"%s\"\n", name, destPath)
+				fmt.Printf("\"%s\" \"%s\"\n", srcPath, destPath)
 			}
 		}
 	}
