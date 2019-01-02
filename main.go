@@ -80,12 +80,17 @@ func NoExt(path string) string {
 }
 
 func main() {
+	doRelated := flag.Bool("related", false, "Include files with same filename yet different extension")
+	useModTime := flag.Bool("modtime", false, "Use mod time if no EXIF tag found")
+	// doMove := flag.Bool("move", false, "Move files")
+	// doCopy := flag.Bool("copy", false, "Copy files")
+	// targetFolder := flag.String("dest", ".", "Destination folder to copy/move files to")
 	flag.Parse()
 
 	args := flag.Args()
 
 	if len(args) <= 1 {
-		fmt.Println("Expected JPEG path argument(s)")
+		flag.Usage()
 		os.Exit(-1)
 		return
 	}
@@ -94,34 +99,38 @@ func main() {
 
 	paths := args[1:]
 	for _, p := range paths {
-		dirname := filepath.Dir(p)
-
-		var dir []os.FileInfo
-		var ok bool
-		if dir, ok = dirs[dirname]; !ok {
-			var err error
-			dir, err = ioutil.ReadDir(dirname)
-			if err == nil {
-				dirs[dirname] = dir
-			}
-		}
-
 		names := make([]string, 0, 2)
 		names = append(names, p)
-		if dir != nil {
-			for _, f := range dir {
-				if f.Name() == p {
-					continue
+
+		// Find related filenames with different extensions:
+		if *doRelated {
+			dirname := filepath.Dir(p)
+
+			var dir []os.FileInfo
+			var ok bool
+			if dir, ok = dirs[dirname]; !ok {
+				var err error
+				dir, err = ioutil.ReadDir(dirname)
+				if err == nil {
+					dirs[dirname] = dir
 				}
-				if strings.HasPrefix(f.Name(), NoExt(p)) {
-					names = append(names, f.Name())
+			}
+
+			if dir != nil {
+				for _, f := range dir {
+					if f.Name() == p {
+						continue
+					}
+					if strings.HasPrefix(f.Name(), NoExt(p)) {
+						names = append(names, f.Name())
+					}
 				}
 			}
 		}
 
 		dateTime, err := extractDateTimeOriginal(p)
 		if err != nil {
-			if err == errNoDateTimeOriginal {
+			if *useModTime && err == errNoDateTimeOriginal {
 				// Use file modification date if no EXIF tag found:
 				stat, err := os.Stat(p)
 				if err != nil {
