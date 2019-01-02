@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -79,13 +80,34 @@ func NoExt(path string) string {
 	return ""
 }
 
+func PathExists(path string) bool {
+	_, err := os.Lstat(path)
+	if err != nil {
+		// if os.IsNotExist(err) {
+		// 	return false
+		// }
+		return false
+	}
+	return true
+}
+
 func main() {
 	doRelated := flag.Bool("related", false, "Include files with same filename yet different extension")
 	useModTime := flag.Bool("modtime", false, "Use mod time if no EXIF tag found")
-	// doMove := flag.Bool("move", false, "Move files")
-	// doCopy := flag.Bool("copy", false, "Copy files")
-	// targetFolder := flag.String("dest", ".", "Destination folder to copy/move files to")
+	doCopy := flag.Bool("cp", false, "Copy files (takes precedence over move)")
+	doMove := flag.Bool("mv", false, "Move files")
+	doSymlink := flag.Bool("symlink", false, "Symlink file to target folder")
+	doHardlink := flag.Bool("hardlink", false, "Hard link file to target folder")
+	doOverwrite := flag.Bool("overwrite", false, "Overwrite destination file if exists")
+	targetFolder := flag.String("target", ".", "Destination folder to copy/move files to")
 	flag.Parse()
+
+	if *doCopy && *doMove {
+		*doMove = false
+	}
+	if *doSymlink && *doHardlink {
+		*doHardlink = false
+	}
 
 	args := flag.Args()
 
@@ -148,8 +170,116 @@ func main() {
 		timestampFilename += fmt.Sprintf("_%03d", int64(time.Duration(dateTime.Nanosecond())/time.Millisecond))
 
 		// Rename all related files to use timestamp:
+	nextName:
 		for _, name := range names {
-			fmt.Printf("\"%s\"\t\"%s\"\n", name, timestampFilename+strings.ToLower(filepath.Ext(name)))
+			// Generate destination path:
+			destPath := timestampFilename + strings.ToLower(filepath.Ext(name))
+			destPath = filepath.Join(*targetFolder, destPath)
+
+			destPathExists := PathExists(destPath)
+			if destPathExists && !*doOverwrite {
+				fmt.Fprintf(os.Stderr, "\"%s\": Not overwriting existing file \"%s\"\n", name, destPath)
+				continue nextName
+			}
+
+			filePerm := os.FileMode(0644)
+			if *doCopy || *doMove || *doSymlink || *doHardlink {
+				stat, err := os.Stat(name)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "\"%s\": %v\n", name, err)
+					continue nextName
+				}
+
+				// Take file permissions of original file:
+				filePerm = stat.Mode() & os.ModePerm
+
+				// Compute directory permissions by setting 'x' bit for each corresponding 'r' bit:
+				// e.g. 'r--r--r--' => 'r-xr-xr-x'
+				dirPerm := filePerm | ((filePerm & 0444) >> 2)
+
+				// Make directory for target file to be contained in:
+				err = os.MkdirAll(filepath.Dir(destPath), dirPerm)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "\"%s\": %v\n", name, err)
+					continue nextName
+				}
+			}
+
+			// Figure out what to do with the file:
+			if *doCopy {
+				fmt.Printf("cp \"%s\" \"%s\"\n", name, destPath)
+
+				// Open source file for reading:
+				fin, err := os.Open(name)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "\"%s\": %v\n", name, err)
+					continue nextName
+				}
+
+				// Open target file for writing:
+				fout, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_EXCL, filePerm)
+				if err != nil {
+					fin.Close()
+					fmt.Fprintf(os.Stderr, "\"%s\": %v\n", name, err)
+					continue nextName
+				}
+
+				// Copy file contents from source to target in 4096 byte chunks:
+				buf := make([]byte, 4096)
+				n := 4096
+				for n > 0 {
+					// Read from source:
+					n, err = fin.Read(buf)
+					if err == io.EOF {
+						break
+					}
+					if err != nil {
+						fin.Close()
+						fout.Close()
+						fmt.Fprintf(os.Stderr, "\"%s\": %v\n", name, err)
+						continue nextName
+					}
+
+					// Write to target:
+					_, err = fout.Write(buf[0:n])
+					if err != nil {
+						fin.Close()
+						fout.Close()
+						fmt.Fprintf(os.Stderr, "\"%s\": %v\n", name, err)
+						continue nextName
+					}
+				}
+
+				fin.Close()
+				fout.Close()
+
+				// Set mod time of target file to that of source file:
+				err = os.Chtimes(destPath, time.Now(), dateTime)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "\"%s\": %v\n", name, err)
+					continue nextName
+				}
+			} else if *doMove {
+				fmt.Printf("mv \"%s\" \"%s\"\n", name, destPath)
+				err := os.Rename(name, destPath)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "\"%s\": %v\n", name, err)
+				}
+			} else if *doSymlink {
+				fmt.Printf("symlink \"%s\" \"%s\"\n", name, destPath)
+				err := os.Symlink(name, destPath)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "\"%s\": %v\n", name, err)
+				}
+			} else if *doHardlink {
+				fmt.Printf("hardlink \"%s\" \"%s\"\n", name, destPath)
+				err := os.Link(name, destPath)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "\"%s\": %v\n", name, err)
+				}
+			} else {
+				fmt.Printf("\"%s\"\t\"%s\"\n", name, destPath)
+			}
 		}
 	}
 }
