@@ -105,10 +105,11 @@ func PathExists(path string) bool {
 }
 
 type Source struct {
-	File     os.FileInfo
-	Path     string
-	Dir      string
-	Filename string
+	File             os.FileInfo
+	Path             string
+	Dir              string
+	Filename         string
+	RelatedFilenames []string
 }
 
 func main() {
@@ -146,7 +147,7 @@ func main() {
 		basePath, _ = os.Getwd()
 	}
 
-	dirFiles := make(map[string][]string)
+	dirFiles := make(map[string][]*Source)
 
 	sources := make([]*Source, 0, 10)
 	err := filepath.Walk(*sourceFolder, func(path string, info os.FileInfo, err error) error {
@@ -180,14 +181,19 @@ func main() {
 				Dir:      dir,
 				Filename: filename,
 			})
-		} else if *doRelated {
+		} else {
 			// Append filename to directory map:
-			var fs []string
+			var fs []*Source
 			var ok bool
 			if fs, ok = dirFiles[dir]; !ok {
-				fs = make([]string, 0, 10)
+				fs = make([]*Source, 0, 10)
 			}
-			fs = append(fs, filename)
+			fs = append(fs, &Source{
+				File:     info,
+				Path:     path,
+				Dir:      dir,
+				Filename: filename,
+			})
 			dirFiles[dir] = fs
 		}
 
@@ -195,6 +201,58 @@ func main() {
 	})
 	if err != nil {
 		panic(err)
+	}
+
+	// Scan for related files to source images:
+	for _, source := range sources {
+		names := make([]string, 0, 2)
+		names = append(names, source.Filename)
+
+		// Find related files with same base name but different extension:
+		if *doRelated {
+			toRemove := make([]int, 0, len(dirFiles[source.Dir]))
+			for i, src := range dirFiles[source.Dir] {
+				if strings.HasPrefix(src.Filename, NoExt(source.Filename)) {
+					names = append(names, src.Filename)
+					toRemove = append(toRemove, i)
+				}
+			}
+
+			// Remove items:
+			if len(toRemove) > 0 {
+				b := dirFiles[source.Dir]
+				a := make([]*Source, 0, len(b)-len(toRemove))
+				j := 0
+				for i := 0; i < len(b); i++ {
+					if j < len(toRemove) && i == toRemove[j] {
+						j++
+						continue
+					}
+					a = append(a, b[i])
+				}
+				if len(a) != cap(a) {
+					panic(errors.New("Bug in remove items!"))
+				}
+				dirFiles[source.Dir] = a
+			}
+		}
+
+		source.RelatedFilenames = names
+	}
+
+	// Add extra movie files to sources:
+	for _, files := range dirFiles {
+		for _, src := range files {
+			isMp4, _ := filepath.Match("*.[mM][pP]4", src.Filename)
+			isMov, _ := filepath.Match("*.[mM][oO4][vV]", src.Filename)
+			is3gp, _ := filepath.Match("*.3[gG][pP]", src.Filename)
+			if !isMp4 && !isMov && !is3gp {
+				continue
+			}
+
+			src.RelatedFilenames = []string{src.Filename}
+			sources = append(sources, src)
+		}
 	}
 
 	for _, source := range sources {
@@ -211,17 +269,7 @@ func main() {
 			}
 		}
 
-		names := make([]string, 0, 2)
-		names = append(names, source.Filename)
-
-		// Find related files with same base name but different extension:
-		if *doRelated {
-			for _, fn := range dirFiles[source.Dir] {
-				if strings.HasPrefix(fn, NoExt(source.Filename)) {
-					names = append(names, fn)
-				}
-			}
-		}
+		names := source.RelatedFilenames
 
 		// Generate timestamp base name:
 		timestampFilename := dateTime.Format("20060102_150405")
