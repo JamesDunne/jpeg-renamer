@@ -145,7 +145,6 @@ func main() {
 		// source is a relative path, so make basePath the current folder
 		basePath, _ = os.Getwd()
 	}
-	fmt.Println(basePath)
 
 	dirFiles := make(map[string][]string)
 
