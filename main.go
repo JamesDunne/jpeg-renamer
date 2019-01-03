@@ -106,6 +106,7 @@ func PathExists(path string) bool {
 
 type Source struct {
 	File             os.FileInfo
+	IsJpeg           bool
 	Path             string
 	Dir              string
 	Filename         string
@@ -180,6 +181,7 @@ func main() {
 				Path:     path,
 				Dir:      dir,
 				Filename: filename,
+				IsJpeg:   true,
 			})
 		} else {
 			// Append filename to directory map:
@@ -256,34 +258,46 @@ func main() {
 	}
 
 	for _, source := range sources {
-		// Find ModTime:
-		path := source.Path
-		dateTime, err := extractDateTimeOriginal(path)
-		if err != nil {
-			if *useModTime && err == errNoDateTimeOriginal {
-				// Use file modification date if no EXIF tag found:
-				dateTime = source.File.ModTime()
-			} else {
-				fmt.Fprintf(os.Stderr, "\"%s\": %v\n", path, err)
-				continue
-			}
-		}
-
+		var dateTime time.Time
+		var timestampFilename string
 		names := source.RelatedFilenames
 
-		// Generate timestamp base name:
-		timestampFilename := dateTime.Format("20060102_150405")
-		timestampFilename += fmt.Sprintf("_%03d", int64(time.Duration(dateTime.Nanosecond())/time.Millisecond))
+		if source.IsJpeg {
+			// Find ModTime:
+			path := source.Path
+			dateTime, err := extractDateTimeOriginal(path)
+			if err != nil {
+				if *useModTime && err == errNoDateTimeOriginal {
+					// Use file modification date if no EXIF tag found:
+					dateTime = source.File.ModTime()
+				} else {
+					fmt.Fprintf(os.Stderr, "\"%s\": %v\n", path, err)
+					continue
+				}
+			}
+
+			// Generate timestamp base name:
+			timestampFilename = dateTime.Format("20060102_150405")
+			timestampFilename += fmt.Sprintf("_%03d", int64(time.Duration(dateTime.Nanosecond())/time.Millisecond))
+		}
 
 		// Rename all related files to use timestamp:
 	nextName:
 		for _, name := range names {
 			// srcPath is relative path from *sourceFolder but not including *sourceFolder prefix
 			srcPath := filepath.Join(source.Dir, name)
+
+			var destFilename string
 			destExt := strings.ToLower(filepath.Ext(srcPath))
 
+			if source.IsJpeg {
+				destFilename = timestampFilename
+			} else {
+				destFilename = NoExt(name)
+			}
+
 			// Generate destination path:
-			destPath := filepath.Join(*targetFolder, source.Dir, timestampFilename+destExt)
+			destPath := filepath.Join(*targetFolder, source.Dir, destFilename+destExt)
 
 			if !*doOverwrite {
 				// Check if destination path exists:
@@ -292,8 +306,8 @@ func main() {
 					if *useSuffixes {
 						// Generate a unique suffix and retry:
 						for counter := 1; ; counter++ {
-							destFilename := fmt.Sprintf("%s_%d%s", timestampFilename, counter, destExt)
-							destPath = filepath.Join(*targetFolder, source.Dir, destFilename)
+							destFilenameSuffix := fmt.Sprintf("%s_%d%s", destFilename, counter, destExt)
+							destPath = filepath.Join(*targetFolder, source.Dir, destFilenameSuffix)
 							if !PathExists(destPath) {
 								break
 							}
@@ -377,11 +391,13 @@ func main() {
 				fin.Close()
 				fout.Close()
 
-				// Set mod time of target file to that of source file:
-				err = os.Chtimes(destPath, time.Now(), dateTime)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "\"%s\": %v\n", srcPath, err)
-					continue nextName
+				if source.IsJpeg {
+					// Set mod time of target file to that of source file:
+					err = os.Chtimes(destPath, time.Now(), dateTime)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "\"%s\": %v\n", srcPath, err)
+						continue nextName
+					}
 				}
 			} else if *doMove {
 				fmt.Printf("mv \"%s\" \"%s\"\n", srcPath, destPath)
