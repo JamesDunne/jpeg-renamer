@@ -106,7 +106,7 @@ func PathExists(path string) bool {
 
 type Source struct {
 	File             os.FileInfo
-	IsJpeg           bool
+	IsMatch          bool
 	Path             string
 	Dir              string
 	Filename         string
@@ -125,7 +125,18 @@ func main() {
 	sourceFolder := flag.String("source", "", "Source folder to scan for JPEGs")
 	doRecurse := flag.Bool("recurse", false, "Recurse into subdirectories of source folder")
 	targetFolder := flag.String("target", ".", "Destination folder to copy/move files to")
+	includeNonMatched := flag.Bool("nonmatch", false, "Include non-matching files in copy/move operation but do not rename them")
 	flag.Parse()
+
+	// Take globs from arguments:
+	globs := flag.Args()
+	if len(globs) == 0 {
+		globs = []string{
+			"*.[jJ][pP][gG]",
+			"*.[jJ][pP][eE][gG]",
+			"*.[pP][nN][gG]",
+		}
+	}
 
 	if *doCopy && *doMove {
 		*doMove = false
@@ -171,17 +182,25 @@ func main() {
 		}
 
 		// Match filename:
-		isJpg, _ := filepath.Match("*.[jJ][pP][gG]", filename)
-		isJpeg, _ := filepath.Match("*.[jJ][pP][eE][gG]", filename)
-		isPng, _ := filepath.Match("*.[pP][nN][gG]", filename)
-		if isJpg || isJpeg || isPng {
+		isMatch := false
+		for _, glob := range globs {
+			isMatch, _ = filepath.Match(glob, filename)
+			if isMatch {
+				break
+			}
+		}
+		// isJpg, _ := filepath.Match("*.[jJ][pP][gG]", filename)
+		// isJpeg, _ := filepath.Match("*.[jJ][pP][eE][gG]", filename)
+		// isPng, _ := filepath.Match("*.[pP][nN][gG]", filename)
+		// isMatch := isJpg || isJpeg || isPng
+		if isMatch {
 			// Track this file as a source:
 			sources = append(sources, &Source{
 				File:     info,
 				Path:     path,
 				Dir:      dir,
 				Filename: filename,
-				IsJpeg:   true,
+				IsMatch:  true,
 			})
 		} else {
 			// Append filename to directory map:
@@ -242,18 +261,13 @@ func main() {
 		source.RelatedFilenames = names
 	}
 
-	// Add extra movie files to sources:
-	for _, files := range dirFiles {
-		for _, src := range files {
-			isMp4, _ := filepath.Match("*.[mM][pP]4", src.Filename)
-			isMov, _ := filepath.Match("*.[mM][oO4][vV]", src.Filename)
-			is3gp, _ := filepath.Match("*.3[gG][pP]", src.Filename)
-			if !isMp4 && !isMov && !is3gp {
-				continue
+	// Add other non-matched files to be copied/moved:
+	if *includeNonMatched {
+		for _, files := range dirFiles {
+			for _, src := range files {
+				src.RelatedFilenames = []string{src.Filename}
+				sources = append(sources, src)
 			}
-
-			src.RelatedFilenames = []string{src.Filename}
-			sources = append(sources, src)
 		}
 	}
 
@@ -262,7 +276,7 @@ func main() {
 		var timestampFilename string
 		names := source.RelatedFilenames
 
-		if source.IsJpeg {
+		if source.IsMatch {
 			// Find ModTime:
 			path := source.Path
 			dateTime, err := extractDateTimeOriginal(path)
@@ -290,7 +304,7 @@ func main() {
 			var destFilename string
 			destExt := strings.ToLower(filepath.Ext(srcPath))
 
-			if source.IsJpeg {
+			if source.IsMatch {
 				destFilename = timestampFilename
 			} else {
 				destFilename = NoExt(name)
@@ -303,7 +317,7 @@ func main() {
 				// Check if destination path exists:
 				destPathExists := PathExists(destPath)
 				if destPathExists {
-					if *useSuffixes {
+					if *useSuffixes && source.IsMatch {
 						// Generate a unique suffix and retry:
 						for counter := 1; ; counter++ {
 							destFilenameSuffix := fmt.Sprintf("%s_%d%s", destFilename, counter, destExt)
@@ -362,9 +376,10 @@ func main() {
 					continue nextName
 				}
 
-				// Copy file contents from source to target in 4096 byte chunks:
-				buf := make([]byte, 4096)
-				n := 4096
+				// Copy file contents from source to target in bufSize byte chunks:
+				const bufSize = 4096
+				buf := make([]byte, bufSize)
+				n := bufSize
 				for n > 0 {
 					// Read from source:
 					n, err = fin.Read(buf)
@@ -391,7 +406,7 @@ func main() {
 				fin.Close()
 				fout.Close()
 
-				if source.IsJpeg {
+				if source.IsMatch {
 					// Set mod time of target file to that of source file:
 					err = os.Chtimes(destPath, time.Now(), dateTime)
 					if err != nil {
@@ -413,9 +428,8 @@ func main() {
 					fmt.Fprintf(os.Stderr, "\"%s\": %v\n", srcPath, err)
 				}
 			} else if *doHardlink {
-				relName, err := filepath.Rel(*targetFolder, srcPath)
 				fmt.Printf("hardlink \"%s\" \"%s\"\n", srcPath, destPath)
-				err = os.Link(relName, destPath)
+				err = os.Link(srcPath, destPath)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "\"%s\": %v\n", srcPath, err)
 				}
