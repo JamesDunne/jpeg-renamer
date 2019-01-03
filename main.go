@@ -105,10 +105,10 @@ func PathExists(path string) bool {
 }
 
 type Source struct {
-	File        os.FileInfo
-	Dir         string
-	Filename    string
-	CreatedDate time.Time
+	File     os.FileInfo
+	Path     string
+	Dir      string
+	Filename string
 }
 
 func main() {
@@ -139,6 +139,13 @@ func main() {
 	}
 
 	*sourceFolder = filepath.Clean(*sourceFolder)
+	basePath := *sourceFolder
+
+	if !filepath.IsAbs(basePath) {
+		// source is a relative path, so make basePath the current folder
+		basePath, _ = os.Getwd()
+	}
+	fmt.Println(basePath)
 
 	dirFiles := make(map[string][]string)
 
@@ -158,8 +165,8 @@ func main() {
 
 		// Split path into dir and filename:
 		dir, filename := filepath.Split(path)
-		if strings.HasPrefix(dir, *sourceFolder) {
-			dir = dir[len(*sourceFolder):]
+		if strings.HasPrefix(dir, basePath) {
+			dir = dir[len(basePath)+1:]
 		}
 
 		// Match filename:
@@ -168,22 +175,11 @@ func main() {
 		isPng, _ := filepath.Match("*.[pP][nN][gG]", filename)
 		if isJpg || isJpeg || isPng {
 			// Track this file as a source:
-			dateTime, err := extractDateTimeOriginal(path)
-			if err != nil {
-				if *useModTime && err == errNoDateTimeOriginal {
-					// Use file modification date if no EXIF tag found:
-					dateTime = info.ModTime()
-				} else {
-					fmt.Fprintf(os.Stderr, "\"%s\": %v\n", path, err)
-					return nil
-				}
-			}
-
 			sources = append(sources, &Source{
-				File:        info,
-				Dir:         dir,
-				Filename:    filename,
-				CreatedDate: dateTime,
+				File:     info,
+				Path:     path,
+				Dir:      dir,
+				Filename: filename,
 			})
 		} else if *doRelated {
 			// Append filename to directory map:
@@ -198,9 +194,23 @@ func main() {
 
 		return nil
 	})
+	if err != nil {
+		panic(err)
+	}
 
 	for _, source := range sources {
-		dateTime := source.CreatedDate
+		// Find ModTime:
+		path := source.Path
+		dateTime, err := extractDateTimeOriginal(path)
+		if err != nil {
+			if *useModTime && err == errNoDateTimeOriginal {
+				// Use file modification date if no EXIF tag found:
+				dateTime = source.File.ModTime()
+			} else {
+				fmt.Fprintf(os.Stderr, "\"%s\": %v\n", path, err)
+				continue
+			}
+		}
 
 		names := make([]string, 0, 2)
 		names = append(names, source.Filename)
